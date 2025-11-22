@@ -139,7 +139,7 @@ jobs:
         run: |
           # Substitute variables in the YAML file
           sed "s|\${GCP_PROJECT_ID}|${{ env.GCP_PROJECT_ID }}|g; s|\${github.sha}|${{ github.sha }}|g" \
-            Deploymentfiles/application-service-deployment.yaml > /tmp/application-service-deployment.yaml
+            k8s-manifests/application-service.yaml > /tmp/application-service-deployment.yaml
           
           # Try to apply first
           kubectl apply -f /tmp/application-service-deployment.yaml || {
@@ -154,7 +154,7 @@ jobs:
         run: |
           # Substitute variables in the YAML file
           sed "s|\${GCP_PROJECT_ID}|${{ env.GCP_PROJECT_ID }}|g; s|\${github.sha}|${{ github.sha }}|g" \
-            Deploymentfiles/order-service-deployment.yaml > /tmp/order-service-deployment.yaml
+            k8s-manifests/order-service.yaml > /tmp/order-service-deployment.yaml
           
           # Try to apply first
           kubectl apply -f /tmp/order-service-deployment.yaml || {
@@ -169,7 +169,7 @@ jobs:
         run: |
           # Substitute variables in the YAML file
           sed "s|\${GCP_PROJECT_ID}|${{ env.GCP_PROJECT_ID }}|g; s|\${github.sha}|${{ github.sha }}|g" \
-            Deploymentfiles/patient-service.yaml > /tmp/patient-service.yaml
+            k8s-manifests/patient-service.yaml > /tmp/patient-service.yaml
           
           # Try to apply first
           kubectl apply -f /tmp/patient-service.yaml || {
