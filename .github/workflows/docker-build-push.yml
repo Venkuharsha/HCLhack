@@ -3,7 +3,7 @@ name: Build and Push Docker Images
 on:
   push:
     branches:
-      - main
+      - mainasdfghjk
 
 env:
   GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
@@ -127,56 +127,3 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-
-# ... 
-
-  deploy:
-    name: Deploy to GKE
-    # This ensures deployment only happens after builds are finished
-    needs: [build-patient, build-application, build-order]
-    
-    # Run this job if the previous jobs were successful (or skipped because of no changes)
-    if: always() && (needs.build-patient.result == 'success' || needs.build-patient.result == 'skipped')
-    
-    runs-on: ubuntu-latest
-    
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      # 1. Authenticate to Google Cloud
-      - id: 'auth'
-        uses: 'google-github-actions/auth@v2'
-        with:
-          credentials_json: '${{ secrets.GCP_SA_KEY }}'
-
-      # 2. Setup Cloud SDK
-      - name: 'Set up Cloud SDK'
-        uses: 'google-github-actions/setup-gcloud@v2'
-
-      # 3. Install kubectl helper
-      - name: Install kubectl
-        run: gcloud components install kubectl --quiet
-
-      # 4. Get Credentials for your specific Cluster
-      - name: 'Get GKE credentials'
-        uses: 'google-github-actions/get-gke-credentials@v2'
-        with:
-          cluster_name: 'autopilot-cluster-1'   # Your manual cluster name
-          location: 'us-central1'               # Your manual cluster region
-
-      # 5. Deploy the manifests from the k8s folder
-      - name: 'Deploy to GKE'
-        run: |
-          echo "Applying Kubernetes manifests..."
-          kubectl apply -f k8s/
-
-          # Force a restart of the deployments to ensure they pick up the 'latest' image we just pushed
-          echo "Restarting deployments to pull new images..."
-          kubectl rollout restart deployment/patient-service || true
-          kubectl rollout restart deployment/order-service || true
-          kubectl rollout restart deployment/application-service || true
-
-          # Check status
-          echo "Deployment status:"
-          kubectl get services
