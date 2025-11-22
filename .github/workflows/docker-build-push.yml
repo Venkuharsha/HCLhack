@@ -8,7 +8,7 @@ on:
 env:
   GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
   GCP_REGION: us-central1
-  ARTIFACT_REGISTRY: asia-docker.pkg.dev
+  ARTIFACT_REGISTRY: us-central1-docker.pkg.dev
   REPOSITORY_NAME: hackathon-repo
 
 jobs:
