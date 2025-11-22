@@ -2,32 +2,42 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: patient-service
+  namespace: harsha
+  labels:
+    app: patient-service
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
-      app: patient
+      app: patient-service
   template:
     metadata:
       labels:
-        app: patient
+        app: patient-service
     spec:
       containers:
-      - name: patient
-        # Matches your Artifact Registry path
-        image: us-central1-docker.pkg.dev/flash-spot-478811-m2/hackathon-repo/patient-service:latest
-        imagePullPolicy: Always
-        ports:
-        - containerPort: 8080
+        - name: patient-service
+          image: asia-docker.pkg.dev/${GCP_PROJECT_ID}/hclhackathonshiva/patient-service:${github.sha}
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 80 # Change if your service runs on a different port
+          env:
+            - name: NODE_ENV
+              value: "Developmet"
+      imagePullSecrets:
+        - name: servicesecret
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: patient-service
+  namespace: harsha
 spec:
-  type: LoadBalancer
   selector:
-    app: patient
+    app: patient-service
   ports:
-  - port: 80
-    targetPort: 8080
+    - name: http
+      protocol: TCP
+      port: 80
+      targetPort: 3000
+  type: ClusterIP

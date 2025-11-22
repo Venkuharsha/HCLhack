@@ -2,31 +2,49 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: order-service
+  namespace: harsha
 spec:
-  replicas: 1
   selector:
     matchLabels:
-      app: order
+      app: order-service
   template:
     metadata:
       labels:
-        app: order
+        app: order-service
     spec:
       containers:
-      - name: order
-        image: us-central1-docker.pkg.dev/flash-spot-478811-m2/hackathon-repo/order-service:latest
-        imagePullPolicy: Always
+      - name: order-service
+        image: asia-docker.pkg.dev/${GCP_PROJECT_ID}/hclhackathonshiva/order-service:${github.sha}
+        env:
+          - name: TZ
+            value: "Asia/Kolkata"        
+          - name: ENV
+            value: dev
+          - name: PORT
+            value: "80"
         ports:
-        - containerPort: 8080
+          - containerPort: 80
+        resources:
+          limits:
+            cpu: "300m"
+            memory: "500Mi"
+          requests:
+            cpu: "200m"
+            memory: "200Mi"
+      imagePullSecrets:
+      - name: serviceaccount            
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: order-service
+  namespace: harsha
 spec:
-  type: LoadBalancer
-  selector:
-    app: order
+  type: ClusterIP
   ports:
-  - port: 80
-    targetPort: 8080
+    - name: http
+      port: 80
+      targetPort: 80
+      protocol: TCP
+  selector:
+    app: order-service    

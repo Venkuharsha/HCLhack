@@ -1,0 +1,189 @@
+name: Build and Deploy to GKE
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  GCP_PROJECT_ID: flash-spot-478811-m2
+  GKE_CLUSTER_NAME: autopilot-cluster-1
+  GKE_REGION: us-central1
+  ARTIFACT_REGISTRY: asia-docker.pkg.dev
+  REPOSITORY_NAME: hclhackathonshiva
+  K8S_NAMESPACE: shiva
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          # Option 1: Use Workload Identity Federation (Recommended)
+          # Uncomment the next two lines and comment credentials_json if using WIF
+          # workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          # service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+          
+          # Option 2: Use Service Account JSON Key (Alternative)
+          # Uncomment the next line and comment WIF lines above if using SA key
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for GCR
+        run: |
+          gcloud auth configure-docker ${{ env.ARTIFACT_REGISTRY }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name : build pattient service image
+        working-directory: ./patient-service
+        run: |
+          docker build -t asia-docker.pkg.dev/flash-spot-478811-m2/hclhackathonshiva/patient-service:${{ github.sha }} .
+          docker push asia-docker.pkg.dev/flash-spot-478811-m2/hclhackathonshiva/patient-service:${{ github.sha }}
+
+      - name : build application service image
+        working-directory: ./application-service
+        run: |
+          docker build -t asia-docker.pkg.dev/flash-spot-478811-m2/hclhackathonshiva/application-service:${{ github.sha }} .
+          docker push asia-docker.pkg.dev/flash-spot-478811-m2/hclhackathonshiva/application-service:${{ github.sha }}
+
+      - name : build order service image
+        working-directory: ./order-service
+        run: |
+          docker build -t asia-docker.pkg.dev/flash-spot-478811-m2/hclhackathonshiva/order-service:${{ github.sha }} .
+          docker push asia-docker.pkg.dev/flash-spot-478811-m2/hclhackathonshiva/order-service:${{ github.sha }}
+
+      - name: Get GKE credentials
+        uses: google-github-actions/get-gke-credentials@v1.0.1
+        with:
+          cluster_name: "autopilot-cluster-1"
+          location: "us-central1"
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'latest'
+
+      - name: Create Namespace
+        run: |
+          kubectl create namespace ${{ env.K8S_NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
+          echo "Namespace ${{ env.K8S_NAMESPACE }} is ready"
+
+      - name: Grant Artifact Registry Access to GKE Service Account
+        run: |
+          # Get the GKE compute service account email (for Autopilot clusters)
+          # For Autopilot, nodes use a managed service account
+          # Grant Artifact Registry Reader role to the default compute service account
+          GKE_SA="${{ env.GCP_PROJECT_ID }}-compute@developer.gserviceaccount.com"
+          
+          echo "Granting Artifact Registry Reader role to compute service account..."
+          gcloud projects add-iam-policy-binding ${{ env.GCP_PROJECT_ID }} \
+            --member="serviceAccount:${GKE_SA}" \
+            --role="roles/artifactregistry.reader" \
+            --condition=None || echo "Note: Service account might already have permissions or may need manual setup for Autopilot"
+
+      - name: Create/Update Image Pull Secrets
+        run: |
+          # Get access token for Artifact Registry (valid for 1 hour)
+          ACCESS_TOKEN=$(gcloud auth print-access-token)
+          
+          # Delete existing secrets if they exist to force update
+          kubectl delete secret serviceaccount --ignore-not-found=true -n ${{ env.K8S_NAMESPACE }}
+          kubectl delete secret servicesecret --ignore-not-found=true -n ${{ env.K8S_NAMESPACE }}
+          kubectl delete secret regcreds --ignore-not-found=true -n ${{ env.K8S_NAMESPACE }}
+          
+          # Create serviceaccount secret (used by application-service and order-service)
+          kubectl create secret docker-registry serviceaccount \
+            --docker-server=${{ env.ARTIFACT_REGISTRY }} \
+            --docker-username=oauth2accesstoken \
+            --docker-password="$ACCESS_TOKEN" \
+            --docker-email=not-used@example.com \
+            --namespace=${{ env.K8S_NAMESPACE }}
+          
+          # Create servicesecret (used by patient-service)
+          kubectl create secret docker-registry servicesecret \
+            --docker-server=${{ env.ARTIFACT_REGISTRY }} \
+            --docker-username=oauth2accesstoken \
+            --docker-password="$ACCESS_TOKEN" \
+            --docker-email=not-used@example.com \
+            --namespace=${{ env.K8S_NAMESPACE }}
+          
+          echo "Image pull secrets created/updated successfully in namespace ${{ env.K8S_NAMESPACE }}"
+          
+      - name: Verify Image Pull Secrets
+        run: |
+          echo "Checking image pull secrets..."
+          kubectl get secrets serviceaccount servicesecret -n ${{ env.K8S_NAMESPACE }}
+          
+          # Test if we can authenticate to Artifact Registry
+          echo "Verifying Artifact Registry access..."
+          gcloud artifacts docker images list \
+            --repository=${{ env.REPOSITORY_NAME }} \
+            --location=asia \
+            --project=${{ env.GCP_PROJECT_ID }} \
+            --limit=1 || echo "Warning: Could not list images. Check service account permissions."
+
+      - name: Deploy Application Service
+        run: |
+          # Substitute variables in the YAML file
+          sed "s|\${GCP_PROJECT_ID}|${{ env.GCP_PROJECT_ID }}|g; s|\${github.sha}|${{ github.sha }}|g" \
+            Deploymentfiles/application-service-deployment.yaml > /tmp/application-service-deployment.yaml
+          
+          # Try to apply first
+          kubectl apply -f /tmp/application-service-deployment.yaml || {
+            # If apply fails, delete both deployment and service, then recreate
+            echo "Apply failed, deleting and recreating resources..."
+            kubectl delete deployment application-service -n ${{ env.K8S_NAMESPACE }} --ignore-not-found=true
+            kubectl delete service application-service -n ${{ env.K8S_NAMESPACE }} --ignore-not-found=true
+            kubectl apply -f /tmp/application-service-deployment.yaml
+          }
+
+      - name: Deploy Order Service
+        run: |
+          # Substitute variables in the YAML file
+          sed "s|\${GCP_PROJECT_ID}|${{ env.GCP_PROJECT_ID }}|g; s|\${github.sha}|${{ github.sha }}|g" \
+            Deploymentfiles/order-service-deployment.yaml > /tmp/order-service-deployment.yaml
+          
+          # Try to apply first
+          kubectl apply -f /tmp/order-service-deployment.yaml || {
+            # If apply fails, delete both deployment and service, then recreate
+            echo "Apply failed, deleting and recreating resources..."
+            kubectl delete deployment order-service -n ${{ env.K8S_NAMESPACE }} --ignore-not-found=true
+            kubectl delete service order-service -n ${{ env.K8S_NAMESPACE }} --ignore-not-found=true
+            kubectl apply -f /tmp/order-service-deployment.yaml
+          }
+
+      - name: Deploy Patient Service
+        run: |
+          # Substitute variables in the YAML file
+          sed "s|\${GCP_PROJECT_ID}|${{ env.GCP_PROJECT_ID }}|g; s|\${github.sha}|${{ github.sha }}|g" \
+            Deploymentfiles/patient-service.yaml > /tmp/patient-service.yaml
+          
+          # Try to apply first
+          kubectl apply -f /tmp/patient-service.yaml || {
+            # If apply fails, delete both deployment and service, then recreate
+            echo "Apply failed, deleting and recreating resources..."
+            kubectl delete deployment patient-service -n ${{ env.K8S_NAMESPACE }} --ignore-not-found=true
+            kubectl delete service patient-service -n ${{ env.K8S_NAMESPACE }} --ignore-not-found=true
+            kubectl apply -f /tmp/patient-service.yaml
+          }
+
+      - name: Verify Deployments
+        run: |
+          kubectl get deployments -n ${{ env.K8S_NAMESPACE }}
+          kubectl get services -n ${{ env.K8S_NAMESPACE }}
+          kubectl rollout status deployment/application-service -n ${{ env.K8S_NAMESPACE }} --timeout=5m || true
+          kubectl rollout status deployment/order-service -n ${{ env.K8S_NAMESPACE }} --timeout=5m || true
+          kubectl rollout status deployment/patient-service -n ${{ env.K8S_NAMESPACE }} --timeout=5m || true
