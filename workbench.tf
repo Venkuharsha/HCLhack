@@ -1,5 +1,5 @@
 resource "google_workbench_instance" "instance" {
-  name     = "workbench-instance"
+  name     = "workbench-instance1"
   location = "us-central1-a"
 
   gce_setup {
